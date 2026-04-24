@@ -43,6 +43,9 @@ HEADER_KO = {
     "bust": "가슴",
     "sleeve": "소매",
     "sleeve length": "소매",
+    "sleeve length from center back": "중심 소매",
+    "sleeve length from centre back": "중심 소매",
+    "center back sleeve length": "중심 소매",
     "sleeve opening": "소매통",
     "length": "총장",
     "total length": "총장",
@@ -403,7 +406,8 @@ def eastsideco_chart_to_table(chart: dict) -> tuple[list[str], list[list[str]]] 
 
 def _blog_data_table_html(headers: list[str], body: list[list[str]]) -> str:
     ths = "".join(
-        '<th style="padding:8px 4px;font-weight:600;border-bottom:1px solid #9a9a9a;font-size:11px;">'
+        '<th style="padding:10px 6px;font-weight:600;border-bottom:1px solid #9a9a9a;'
+        "font-family:'Nanum Gothic','나눔고딕',system-ui,-apple-system,sans-serif;font-size:15pt;\">"
         f"{html.escape(h)}</th>"
         for h in headers
     )
@@ -414,7 +418,10 @@ def _blog_data_table_html(headers: list[str], body: list[list[str]]) -> str:
             padded.append("")
         padded = padded[: len(headers)]
         tds = "".join(
-            f'<td style="padding:8px 4px;font-size:11px;color:#444;">{html.escape(c)}</td>' for c in padded
+            '<td style="padding:10px 6px;color:#444;'
+            "font-family:'Nanum Gothic','나눔고딕',system-ui,-apple-system,sans-serif;font-size:15pt;\">"
+            f"{html.escape(c)}</td>"
+            for c in padded
         )
         trs.append(f"<tr>{tds}</tr>")
     return (
@@ -902,6 +909,191 @@ def render_product_block_naver_text(
     return "\n".join(lines).strip() + "\n\n"
 
 
+def _naver_span(text: str, *, font_pt: int, bold: bool = False) -> str:
+    w = "700" if bold else "400"
+    return (
+        "<span "
+        "class=\"se-fs se-ff-nanumgothic se-fs15 se-node\" "
+        f"style=\"color: rgb(0, 0, 0); font-family: 'Nanum Gothic','나눔고딕',sans-serif; "
+        f"font-size: {font_pt}pt; font-weight: {w};\">"
+        f"{html.escape(text)}</span>"
+    )
+
+
+def _naver_hr(*, width_pct: int = 100) -> str:
+    """
+    네이버 붙여넣기 시 <hr> 스타일이 정리되는 경우가 있어,
+    se-horizontalLine 구조 + border-top 1px div로 '한 줄'을 그립니다.
+    """
+    w = max(1, min(100, int(width_pct)))
+    return (
+        "<div class=\"se-component se-horizontalLine se-l-default\" data-a11y-title=\"구분선\">"
+        "<div class=\"se-component-content\">"
+        f"<div class=\"se-section se-section-horizontalLine se-l-default se-section-align-center\" style=\"width:{w}%;margin:0 auto;\">"
+        "<div style=\"width:100%;border-top:1px solid #ddd;height:0;line-height:0;display:block;\"></div>"
+        "</div></div></div>"
+    )
+
+
+def _naver_spacer(px: int = 30) -> str:
+    return f"<div style=\"height:{int(px)}px;\"></div>"
+
+
+def _naver_image_strip(img1: str, img2: str) -> str:
+    # 네이버 이미지 스트립 느낌(50% + 50%)
+    def one(src: str) -> str:
+        return (
+            "<div class=\"se-module se-module-image se-unit\" "
+            "style=\"flex:0 0 50%;max-width:50%;width:50%;\">"
+            "<div class=\"se-module-image-container\" style=\"width:100%;\">"
+            f"<img src=\"{html.escape(src, quote=True)}\" alt=\"\" class=\"se-image-resource\" "
+            "style=\"width:100%;height:auto;display:block;object-fit:cover;\"/>"
+            "</div></div>"
+        )
+
+    return (
+        "<div class=\"se-component se-imageStrip2 se-component-imageStrip se-l-default\" data-a11y-title=\"나란히 사진\">"
+        "<div class=\"se-component-content se-component-content-extend\">"
+        "<div class=\"se-section se-section-imageStrip2 se-l-default se-section-align-center\">"
+        "<div class=\"se-imageStrip2-container\" style=\"display:flex;flex-wrap:nowrap;gap:0;width:100%;\">"
+        f"{one(img1)}{one(img2)}"
+        "</div></div></div></div>"
+    )
+
+
+def _naver_text_center(text_html: str, *, width_pct: int = 50) -> str:
+    return (
+        "<div class=\"se-component se-text se-l-default\" data-a11y-title=\"본문\">"
+        "<div class=\"se-component-content\">"
+        f"<div class=\"se-section se-section-text se-l-default\" "
+        f"style=\"width:{width_pct}%;margin:0 auto;text-align:center;\">"
+        "<p class=\"se-text-paragraph se-text-paragraph-align-center\" "
+        "style=\"line-height:1.8;text-align:center;margin:0;\">"
+        f"{text_html}"
+        "</p></div></div></div>"
+    )
+
+
+def _naver_table_from_tsv(headers: list[str], body: list[list[str]], *, width_pct: int = 50) -> str:
+    # 네이버 표 느낌(테두리 없음, 가운데 정렬)
+    # 폭은 균등 분배
+    cols = max(1, len(headers))
+    col_w = max(5, int(100 / cols))
+
+    def td(inner: str, *, is_th: bool = False) -> str:
+        tag = "th" if is_th else "td"
+        return (
+            f"<{tag} class=\"se-cell se-cell-{ 'th' if is_th else 'td' }\" "
+            f"style=\"width:{col_w}%;height:40px;box-sizing:border-box;padding:0 8px;"
+            "text-align:center;vertical-align:middle;white-space:nowrap;"
+            "border-width:medium;border-style:none;border-color:currentcolor;\">"
+            "<div class=\"se-module se-module-text se-unit\">"
+            "<div class=\"se-module-text-paragraph se-text-paragraph-align-center\" style=\"line-height: 1.6;\">"
+            f"{inner}"
+            "</div></div></"
+            f"{tag}>"
+        )
+
+    header_row = "<tr class=\"se-tr\">" + "".join(td(_naver_span(h, font_pt=13, bold=True), is_th=True) for h in headers) + "</tr>"
+    body_rows = []
+    for row in body:
+        padded = list(row)
+        while len(padded) < len(headers):
+            padded.append("")
+        padded = padded[: len(headers)]
+        body_rows.append(
+            "<tr class=\"se-tr\">" + "".join(td(_naver_span(c, font_pt=13), is_th=False) for c in padded) + "</tr>"
+        )
+
+    colgroup = "<colgroup>" + "".join(f"<col style=\"width:{col_w}%;\"/>" for _ in range(cols)) + "</colgroup>"
+
+    return (
+        "<div class=\"se-component se-table se-l-default\" data-a11y-title=\"표\">"
+        "<div class=\"se-component-content\">"
+        f"<div class=\"se-section se-section-table se-l-default se-section-align-center\" style=\"width:{width_pct}%;margin:0 auto;\">"
+        "<div class=\"se-table-container\">"
+        "<table class=\"se-table-content\" "
+        "style=\"border-width:medium;border-style:none;border-color:currentcolor;border-image:initial;"
+        "width:100%;table-layout:fixed;border-collapse:collapse;\">"
+        "<tbody>"
+        f"{colgroup}{header_row}{''.join(body_rows)}"
+        "</tbody></table></div></div></div></div>"
+    )
+
+
+def render_product_block_naver_html(
+    title: str,
+    img_urls: list[str],
+    table: tuple[list[str], list[list[str]]] | None,
+    size_note_html: str | None,
+    *,
+    mid_html: str | None = None,
+    title_pt: int = 17,
+    table_pt: int = 13,
+    text_width_pct: int = 100,
+    table_width_pct: int = 80,
+    gap_px: int = 60,
+) -> str:
+    imgs = (img_urls or [])[:2]
+    if len(imgs) == 1:
+        imgs = [imgs[0], imgs[0]]
+    if len(imgs) < 2:
+        imgs = imgs + [""] * (2 - len(imgs))
+
+    parts: list[str] = []
+    if imgs[0] and imgs[1]:
+        parts.append(_naver_image_strip(imgs[0], imgs[1]))
+        parts.append(_naver_spacer(gap_px))
+
+    parts.append(
+        _naver_text_center(
+            _naver_span(title.strip() or "UNTITLED", font_pt=title_pt, bold=False),
+            width_pct=text_width_pct,
+        )
+    )
+    parts.append(_naver_spacer(gap_px))
+
+    # 표 우선: (1) 기존 table, (2) Measurements 파싱, (3) 문단 텍스트
+    picked_table = table
+    extra_text = None
+    if not picked_table and size_note_html:
+        plain = _html_fragment_to_plain_text(size_note_html)
+        ms = _extract_measurements_tables(plain)
+        if ms:
+            _t, (h, b) = ms[0]
+            picked_table = (h, b)
+        else:
+            extra_text = plain.strip()
+
+    if picked_table:
+        h, b = picked_table
+        # 폰트 크기 주입 위해 span 생성 함수를 table_pt로 교체
+        # _naver_table_from_tsv는 내부에서 13pt로 기본 생성하므로 여기서 table_pt 반영
+        table_html = _naver_table_from_tsv(
+            [str(x) for x in h],
+            [[str(x) for x in row] for row in b],
+            width_pct=table_width_pct,
+        )
+        if table_pt != 13:
+            # 간단 치환: font-size: 13pt -> font-size: {table_pt}pt
+            table_html = table_html.replace("font-size: 13pt;", f"font-size: {table_pt}pt;")
+        parts.append(table_html)
+        parts.append(_naver_spacer(gap_px))
+    elif extra_text:
+        parts.append(_naver_text_center(_naver_span(extra_text, font_pt=13), width_pct=text_width_pct))
+        parts.append(_naver_spacer(gap_px))
+
+    if mid_html:
+        mid_text = _html_fragment_to_plain_text(mid_html).strip()
+        if mid_text:
+            parts.append(_naver_text_center(_naver_span(mid_text, font_pt=13), width_pct=text_width_pct))
+            parts.append(_naver_spacer(gap_px))
+
+    parts.append(_naver_hr(width_pct=85))
+    parts.append(_naver_spacer(gap_px))
+    return "".join(parts)
+
+
 def render_product_block(
     title: str,
     img_urls: list[str],
@@ -929,8 +1121,10 @@ def render_product_block(
         f'{"".join(img_tags)}</div>'
     )
     name_block = (
-        f'<p style="margin:18px 0 14px;text-align:center;font-size:13px;letter-spacing:0.04em;'
-        f'text-transform:uppercase;color:#111;">{safe_title}</p>'
+        f'<p style="margin:18px 0 14px;text-align:center;'
+        "font-family:'Nanum Gothic','나눔고딕',system-ui,-apple-system,sans-serif;"
+        "font-size:19pt;letter-spacing:0.04em;text-transform:uppercase;color:#111;\">"
+        f"{safe_title}</p>"
     )
 
     if table:
@@ -970,9 +1164,9 @@ def main() -> None:
     ap.add_argument("-o", "--output", default="recto_blog_draft.html", help="출력 HTML 경로")
     ap.add_argument(
         "--format",
-        choices=["html", "naver"],
+        choices=["html", "naver", "naver_html"],
         default="html",
-        help="출력 포맷: html(기본) / naver(텍스트+TSV 표, 네이버 에디터용)",
+        help="출력 포맷: html(기본) / naver(텍스트+TSV 표) / naver_html(네이버 se-* 구조 HTML)",
     )
     ap.add_argument("--limit", type=int, default=0, help="처리할 상품 수 상한 (0이면 전체)")
     ap.add_argument("--sleep", type=float, default=1.2, help="요청 사이 대기(초)")
@@ -1088,6 +1282,18 @@ def main() -> None:
                         mid_html=mid,
                     )
                 )
+            elif args.format == "naver_html":
+                blocks.append(
+                    render_product_block_naver_html(
+                        shopify_product_title_from_meta(prod),
+                        imgs,
+                        table,
+                        None,
+                        mid_html=mid,
+                        title_pt=17,
+                        table_pt=13,
+                    )
+                )
             else:
                 blocks.append(
                     shopify_build_block(
@@ -1125,6 +1331,12 @@ def main() -> None:
                 table = parse_size_table(soup)
                 note = None if table else (imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup))
                 blocks.append(render_product_block_naver_text(title, images, table, note))
+            elif args.format == "naver_html":
+                title = imweb_title(soup) if engine == "imweb" else _title_from_page(soup)
+                images = imweb_product_images(soup, purl) if engine == "imweb" else _parse_ld_product_images(soup, purl)
+                table = parse_size_table(soup)
+                note = None if table else (imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup))
+                blocks.append(render_product_block_naver_html(title, images, table, note, title_pt=17, table_pt=13))
             else:
                 blocks.append(build_block_from_detail(soup, purl, engine))
             time.sleep(args.sleep)
@@ -1132,12 +1344,19 @@ def main() -> None:
     site_label = parsed.netloc.replace("www.", "")
     if args.format == "naver":
         doc = "".join(blocks)
+    elif args.format == "naver_html":
+        doc = (
+            "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"/>"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
+            f"<title>{html.escape(site_label)} 네이버형</title></head>"
+            "<body style=\"margin:0;padding:24px;background:#fff;\">"
+            f"{''.join(blocks)}</body></html>"
+        )
     else:
         doc = (
             "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"/>"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
             f"<title>{html.escape(site_label)} 초안</title></head><body style=\"margin:24px;background:#fff;\">"
-            f"<p style=\"font-size:12px;color:#666;\">자동 생성 초안 — 네이버 스마트에디터 HTML 모드 등에 붙여 넣은 뒤 미리보기로 확인하세요.</p>"
             f"{''.join(blocks)}</body></html>"
         )
 
