@@ -1,0 +1,215 @@
+<div class="real-size-area" id="data_ruler_GM0025120584770">
+			<div class="size-img">
+					<div class="ruler" id="ruler_GM0025120584770">
+						<img id="rulerImg_GM0025120584770"
+							 data-goods-lazy="https://img.ssfshop.com/size_gd/pc_03_size_knit_kr_230523.png"
+							 data-goods-lazy-src-chk="true"
+							 data-prefix="https://img.ssfshop.com/size_gd/"
+							 data-img-url="pc_03_size_knit_kr_230523.png"
+							 data-background-img-url=""
+							 data-background-img-class="" />
+						<dl id="rulerValues_GM0025120584770" class="values"></dl>
+					</div>
+				</div>
+			<div class="size-chart" id="realSizeChartDiv0" data-is-knit="true">
+					<div class="chart-table">
+						<div class="chart-header">
+							<span class="chart-unit">(단위: cm)</span>
+						</div>
+						<table class="tbl_info" summary="Size">
+	<colgroup>
+		<col width="100" />
+		<col />
+	</colgroup>
+	<tbody>
+		<tr>
+			<th><span>사이즈</span></th>
+			<td><span>M(002)</span></td>
+			<td><span>L(003)</span></td>
+ 		</tr>
+		<tr>
+			<th><span>가슴단면</span></th>
+			<td><span>55.5</span></td>
+			<td><span>58</span></td>
+		</tr>
+		<tr>
+			<th><span>소매길이</span></th>
+			<td><span>74</span></td>
+			<td><span>76</span></td>
+		</tr>
+		<tr>
+			<th><span>총장</span></th>
+			<td><span>59</span></td>
+			<td><span>61</span></td>
+		</tr>
+	</tbody>
+</table></div>
+				</div>
+			</div>
+		<script>
+		$(document).ready(function(){
+
+			//자사 - 타이틀 있는 사이즈 조견표 관련 태그 삽입
+			var partmalSectCd = "MCOM";
+			if(partmalSectCd ==  "MCOM") {
+				$('.tbl_info').each(function (){
+					var titleSpan = $(this).prev('span');
+					if(titleSpan.length >0 && (titleSpan.text() == '상의' || titleSpan.text() == '하의')) { //상의 혹은 하의 태그가 있을 경우
+						//기존 태그를 모두 지우고
+						$(this).prev('span').remove();
+						var chartHeader = $(this).prev('.chart-header');
+						var chartTable = $(this).parent('.chart-table');
+						if(chartHeader.length > 0) {
+							chartHeader.remove();
+						}
+						if(chartTable.length > 0) {
+							$(this).unwrap('.chart-table');
+						}
+
+						//타이틀 태그로 변경
+						$(this).wrapAll('<div class="chart-table"></div>');
+						var viewHtml ='<div class="chart-header">';
+						viewHtml +='    <span class="chart-title">'+titleSpan.text()+'</span>';
+						viewHtml +='    <span class="chart-unit">(단위: cm)</span>';
+						viewHtml +='</div>';
+						$(this).before(viewHtml); //타이틀 추가
+						$(this).parents('.size-chart').prev('.size-img').addClass('has-tit'); //클래스 추가
+					}
+				});
+			}
+
+			$("div[id^=realSizeChartDiv]>table").each(function (i){
+				var isKnit = $(this).parent().data("is-knit");
+
+				var maxChlidCnt = 0;
+				var isLoop = false;
+
+				$(this).find("tbody>tr").each(function (idx){
+					if(isKnit === true) {
+						$(this).find("th:contains('목너비')").parent().remove();
+					}
+
+					if( idx !== 0 && maxChlidCnt < $(this).children().length) {
+						maxChlidCnt = $(this).children().length;
+						isLoop = true;
+					}
+				});
+
+				if(isLoop){
+					$(this).find("tbody>tr").each(function (idx){
+						if( idx !== 0 && maxChlidCnt !== $(this).children().length) {
+							for(var i = $(this).children().length; i < maxChlidCnt ; i++){
+								$(this).append("<td><span>&nbsp;</span></td>");
+							}
+						}
+					});
+				}
+			});
+
+			goodsDetailImg.lazyLoad("div[id^=ruler_]");
+		});
+	</script>
+	<div class="txt-guide">
+			<ul><li>디자인, 소재 및 측정 방법에 따라 약간의 오차가 있을 수 있습니다.</li></ul>
+		</div>
+	<script>
+
+		$(".ruler_size_btn").on("click", function(){
+			var me = this;
+			var itmNo = $(me).data('itmno');
+			var godNo = $(me).data('godno');
+			var dspItmNm = $(me).data('dsp-itm-nm')||'';
+			var itmnm = $(me).data('itmnm')||'';
+			var idx = $(me).data('idx');
+
+			var img = $('#rulerImg_' + godNo);
+			if( $("input[name='rulerDd_" + itmNo + "']").length > 0 && img.data('background-img-url')){
+
+				var ddHtml = '';
+				$("input[name='rulerDd_" + itmNo + "']").each(function(idx,ddItem){
+					ddHtml += '<dd class="' + $(ddItem).data('ddcode') + '">';
+					ddHtml += '<span>' + $(ddItem).data('pmname') + '<em>' + $(ddItem).val() +'</em></span></dd>';
+					ddHtml += '</dd>';
+				});
+				$('#ruler_'+godNo).addClass(img.data('background-img-class'));
+				$('#rulerValues_' + godNo).html(ddHtml);
+
+				img.attr( 'src', img.data('prefix') + img.data('background-img-url'));
+			} else {
+				$('#ruler_'+godNo).removeClass();
+				$('#ruler_'+godNo).addClass('ruler');
+				$('#rulerValues_' + godNo).html('');
+				img.attr( 'src', img.data('prefix') + img.data('img-url'));
+			}
+
+			if($('#rulerValues_' + godNo).html() === ''){
+
+			}
+
+			$(this).parents("div[class='tab-navs']").find("li[aria-controls^='real_size_li_']").each(function(idx,liTtem){
+				if($(liTtem).attr("aria-controls") === 'real_size_li_' + itmNo){
+					$(liTtem).attr("aria-selected", "true");
+				} else {
+					$(liTtem).attr("aria-selected", "false");
+				}
+			});
+
+			setTdActive(idx, itmnm);
+
+		});
+
+		function setTdActive(idx, itmnm){
+			$("#realSizeChartDiv"+idx+" table").find("td").each(function(){
+				$(this).removeClass("active");
+			});
+
+			var targetTd;
+			$("#realSizeChartDiv"+idx+" table").find("tr:first td").each(function(i){
+				if($(this).text() === itmnm.toString()) {
+					targetTd = $(this);
+					return;
+				}
+			});
+
+			var targetIndex = $(targetTd).index();
+			if($(targetTd)){
+				$(targetTd).addClass("active");
+
+				$("#realSizeChartDiv"+idx+" table").find('tr').each(function(i, o){
+					$(this).children().eq(targetIndex).addClass("active");
+				});
+			}
+		}
+
+		function setTdRecommendEffect(){
+			$(".ruler_size_btn").each(function(){
+				if($(this).data("recom-size-yn")){
+					var itmnm = $(this).data('itmnm')||'';
+					var idx = $(this).data('idx');
+
+					var targetTd;
+					$("#realSizeChartDiv"+idx+" table").find("tr:first td").each(function(i){
+						if($(this).text() === itmnm.toString()) {
+							targetTd = $(this);
+							return;
+						}
+					});
+
+					var targetIndex = $(targetTd).index();
+					if($(targetTd)){
+						$(targetTd).addClass("recommend");
+						$("#realSizeChartDiv"+idx+" table").find('tr').each(function(i, o){
+							$(this).children().eq(targetIndex).addClass("recommend");
+						});
+					}
+				}
+			});
+		}
+
+		
+		$("div[class='tab-navs'] a[data-default-select='Y']").each(function(index, item) {
+			$(item).trigger('click');
+		});
+
+		setTdRecommendEffect();
+	</script>

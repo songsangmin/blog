@@ -27,7 +27,7 @@ python3 scripts/recto_list_to_blog_html.py "<목록URL>" --format naver -o out.t
 ### 2) HTML 초안(로컬 미리보기/참고용)
 
 ```bash
-python3 scripts/recto_list_to_blog_html.py "<목록URL>" --format html -o out.html
+python3 scripts/recto_list_to_blog_html.py "https://recto.co/product/list.html?cate_no=219" --format html -o out.html
 ```
 
 ---

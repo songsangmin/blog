@@ -1,0 +1,93 @@
+<!-- 일반상품 -->
+                    <div id="sizeTabView" class="size-tab-view" view-section="sizeTabView">
+			<!--실측 사이즈-->
+			<div id="goodsRealSizeTab"></div>
+			<!--//실측 사이즈-->
+
+			<!--사이즈 가이드-->
+			<div class="gods-size-guide" data-options='{"overlap": true}'>
+				</div>
+			<script>
+				ssf.Accordion.init('.gods-size-guide');
+			</script>
+			<!--//사이즈 가이드-->
+
+		</div>
+	<!--//#137255 :  브랜드 사이즈가이드 세분화-->
+	<script>
+
+	
+	function hideSizeTab(){
+		if($("#goodsRealSizeTab")){
+			$("#goodsRealSizeTab").remove("");
+			$("#goodsRealSizeTabLi").remove();
+			//$("#brndSizeGuidetabLi").find("a").addClass("on");
+			$("#brndSizeGuidetabLi").find("a").click();
+		}
+		if($("#size_data_table") && $.trim($("#size_data_table").html()) == ""){
+			$("#tabs_size_guide").html("");
+		}  
+		
+			if($("#info_size")) $("#info_size").html("");
+							
+				if($("#sizeTabLi")) $("#sizeTabLi").hide();
+				//if($("#goodsDetailTabsUl")) $("#goodsDetailTabsUl").addClass("third");
+				if($("#goGoodsDetailTabBtn")) $("#goGoodsDetailTabBtn").hide();
+			
+	}
+
+	
+		var goodsRecommendItmNos = [];
+		
+
+		$.ajax({
+			type : "GET",
+			async : true,
+			url : "/public/goods/detail/realSize",
+			data : {
+				godNo:"GM0025120584770",
+				godTpCd:"GNRL_GOD",
+				partmalSectCd:"MCOM",
+				recommendItmList: goodsRecommendItmNos
+			},
+			success : function(data) {
+				if( data ){
+					$('#goodsRealSizeTab').append(data);
+				} else {
+					hideSizeTab();
+				}
+			},
+			error: function( pa_data, status, err ) {
+				hideSizeTab();
+			}
+		});
+	
+	
+	function fn_changeBrndSizeGd(stdSizeSectCd){
+		$('[id^=sizeGdDiv]').hide();
+		$('#sizeGdDiv'+stdSizeSectCd).show();
+
+		$("div[class='tab-navs'] li[aria-controls^='brnd_size_li_']").each(function(idx,liTtem){
+			if($(liTtem).attr("aria-controls") === 'brnd_size_li_' + stdSizeSectCd){
+				$(liTtem).attr("aria-selected", "true");
+			} else {
+				$(liTtem).attr("aria-selected", "false");
+			}
+		});
+
+	}
+
+	
+	$("div[class='tab-navs'] a[data-default-select='Y']").each(function(index, item) {
+		$(item).trigger('click');
+	});
+
+	$(document).ready(function (){
+		if($("li[id^=sysBrndSizeGdLi][aria-selected=true]").length === 0){
+			$("li[id^=sysBrndSizeGdLi]>a").eq(0).click();
+		}
+
+		
+	});
+
+</script>

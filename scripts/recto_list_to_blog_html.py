@@ -62,7 +62,8 @@ HEADER_KO = {
 }
 
 PRODUCT_PATH_RE = re.compile(
-    r"/product/(?P<slug>[a-z0-9][a-z0-9-]*)/(?P<pid>\d+)/category/(?P<cate>\d+)/display/\d+/",
+    # slug에 한글/괄호/퍼센트 인코딩(예: ...-예약발송)도 올 수 있어 ASCII만 제한하지 않는다.
+    r"/product/(?P<slug>[^/\"'?#]+)/(?P<pid>\d+)/category/(?P<cate>\d+)/display/\d+/",
     re.I,
 )
 
@@ -207,6 +208,14 @@ def _is_shopify_product_url(parsed: ParseResult) -> bool:
     """단일 상품 PDP(예: /ko-kr/products/handle). /collections/…/products/… 도 PDP로 처리."""
     path = parsed.path or ""
     return bool(re.search(r"/products/[^/]+/?", path))
+
+
+def _is_cafe24_product_url(parsed: ParseResult) -> bool:
+    """Cafe24 단일 상품 URL(SEO path 또는 detail.html)."""
+    path = parsed.path or ""
+    if "/product/detail.html" in path:
+        return True
+    return bool(re.search(r"/product/[^/]+/\d+/", path))
 
 
 def parse_shopify_var_meta(html: str) -> dict | None:
@@ -726,24 +735,148 @@ def _format_size_note_paragraph(text: str) -> str:
     )
 
 
+def _extract_img_urls_from_fragment(fragment: str) -> list[str]:
+    frag = (fragment or "").strip()
+    if not frag:
+        return []
+    soup = BeautifulSoup(frag, "html.parser")
+    out: list[str] = []
+    seen: set[str] = set()
+    for im in soup.find_all("img", src=True):
+        src = (im.get("src") or "").strip()
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        out.append(src)
+    return out
+
+
 def _looks_like_size_note(text: str) -> bool:
     t = text.lower()
-    return "cm" in t or "실측" in text or "사이즈" in text or "화장" in text
+    return (
+        "cm" in t
+        or "measurements" in t
+        or "size guide" in t
+        or "실측" in text
+        or "사이즈" in text
+        or "화장" in text
+        or "shoulders" in t
+        or "chest" in t
+        or "waist" in t
+    )
 
 
 def parse_size_fallback_note(soup: BeautifulSoup) -> str | None:
     """표가 없는 스킨: simple_desc_css 또는 JSON-LD description."""
+    # Kangjungseok 등: 탭 구조에서 'Size guide' 뒤에 이미지(<ol class="tab_wrap"><img ...>)만 있는 경우
+    page_base = ""
+    canon = soup.find("link", rel="canonical")
+    if canon and canon.get("href"):
+        page_base = canon["href"].strip()
+    if not page_base:
+        ogu = soup.find("meta", attrs={"property": "og:url"})
+        if ogu and ogu.get("content"):
+            page_base = ogu["content"].strip()
+
+    for a in soup.find_all("a"):
+        txt = a.get_text(" ", strip=True).lower()
+        if "size guide" not in txt and "size info" not in txt:
+            continue
+        cand = a.find_next(["ol", "div", "p"])
+        if not cand:
+            continue
+        imgs = cand.find_all("img", src=True)
+        if not imgs:
+            continue
+        parts: list[str] = []
+        for im in imgs:
+            src = (im.get("src") or "").strip()
+            abs_src = _abs_url(page_base, src) if src else None
+            if abs_src:
+                parts.append(f'<img src="{html.escape(abs_src, quote=True)}" alt="" />')
+        if parts:
+            return "".join(parts)
+
     cell = soup.find("td", class_=lambda c: bool(c) and "simple_desc_css" in c)
     if cell:
         text = cell.get_text("\n", strip=True)
         if text and _looks_like_size_note(text):
-            return _format_size_note_paragraph(text)
+            slim = _extract_size_info_note_block(text) or text
+            return _format_size_note_paragraph(slim)
+    # Epicenter 등: 아코디언 'Size guide' 섹션에 실측이 들어감
+    h = soup.find(lambda t: getattr(t, "name", None) in ("h3", "h4", "h5") and "size guide" in t.get_text(" ", strip=True).lower())
+    if h:
+        li = h.find_parent("li") or h.parent
+        desc_div = None
+        if li:
+            desc_div = li.find("div", class_=lambda c: bool(c) and "accordion-desc" in c)
+        if not desc_div:
+            desc_div = h.find_next("div", class_=lambda c: bool(c) and "accordion-desc" in c)
+        if desc_div:
+            txt = desc_div.get_text("\n", strip=True)
+            if txt and _looks_like_size_note(txt):
+                return _format_size_note_paragraph("Size guide\n" + txt)
+    # Epicenter 일부 페이지: 본문에 '#####  Size guide' 형태로 들어가기도 해서
+    # 페이지 전체 텍스트에서 size guide 이후만 잘라서 전달
+    full = soup.get_text("\n", strip=True)
+    low = full.lower()
+    if "size guide" in low:
+        si = low.find("size guide")
+        cut = full[si : si + 6000]
+        for tok in ("return&exchange", "return & exchange", "return", "exchange", "delivery", "배송"):
+            j = cut.lower().find(tok)
+            if j > 0:
+                cut = cut[:j]
+                break
+        if cut and _looks_like_size_note(cut):
+            return _format_size_note_paragraph(cut)
+    # 마지막 fallback: JSON-LD description
     data = _parse_ld_product(soup)
     if data and isinstance(data.get("description"), str):
         desc = data["description"].strip()
         if desc and _looks_like_size_note(desc):
-            return _format_size_note_paragraph(desc)
+            slim = _extract_size_info_note_block(desc) or desc
+            return _format_size_note_paragraph(slim)
+
     return None
+
+
+def _extract_size_info_note_block(text: str) -> str | None:
+    """
+    HTAE 같은 상세 설명에서 'Size Info (cm)' 구간만 잘라 반환.
+    (INFORMATION/DELIVERY INFO/SHIPPING INFO 이전까지만)
+    """
+    if not text:
+        return None
+    lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
+    start = None
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if "size info" in low or "size guide" == low:
+            start = i
+            break
+    if start is None:
+        return None
+
+    stop_tokens = (
+        "information",
+        "delivery info",
+        "shipping info",
+        "exchange",
+        "return",
+        "구매방법",
+        "상품 옵션",
+    )
+    picked: list[str] = []
+    for ln in lines[start:]:
+        low = ln.lower()
+        if any(tok in low for tok in stop_tokens):
+            break
+        if ln:
+            picked.append(ln)
+    if not picked:
+        return None
+    return "\n".join(picked)
 
 
 def _html_fragment_to_plain_text(fragment: str) -> str:
@@ -802,7 +935,7 @@ def _extract_measurements_tables(text: str) -> list[tuple[str, tuple[list[str], 
     i = 0
     n = len(lines)
     while i < n:
-        if lines[i].strip().lower() != "measurements":
+        if not lines[i].strip().lower().startswith("measurements"):
             i += 1
             continue
         i += 1
@@ -817,22 +950,74 @@ def _extract_measurements_tables(text: str) -> list[tuple[str, tuple[list[str], 
                 i += 1
                 continue
             low = raw.lower()
+            if low in ("one size", "onesize", "one-size", "free", "os"):
+                cur_size = "ONE SIZE"
+                i += 1
+                continue
             if low.startswith("(") or "deviation" in low or low.startswith("woman ") or low.startswith("man "):
                 break
             if raw.startswith("-") and "fit" in low:
                 # 다음 상품 설명으로 넘어가는 케이스 방지
                 break
 
-            m = re.match(r"^(\d+)\s*-\s*([A-Za-z][A-Za-z /_-]*)\s+(\d+(?:\.\d+)?|\d+(?:,\d+)?)\s*$", raw)
+            # 불릿/대시로 시작하는 항목(- Head circumference 61.5 등)
+            raw_item = raw
+            if raw_item.startswith(("-", "•", "·")):
+                raw_item = raw_item.lstrip("-•·").strip()
+            low_item = raw_item.lower()
+
+            # 가방/소품류: H30cm x W36cm x D5cm 형태
+            m_dim = re.match(
+                r"^(?:H|Height)\s*([0-9]+(?:\.[0-9]+)?)\s*cm?\s*[x×]\s*"
+                r"(?:W|Width)\s*([0-9]+(?:\.[0-9]+)?)\s*cm?\s*[x×]\s*"
+                r"(?:D|Depth)\s*([0-9]+(?:\.[0-9]+)?)\s*cm?\s*$",
+                raw,
+                re.I,
+            )
+            if not m_dim:
+                # 라벨 없이 숫자만: 30cm x 36cm x 5cm
+                m_dim = re.match(
+                    r"^([0-9]+(?:\.[0-9]+)?)\s*cm?\s*[x×]\s*"
+                    r"([0-9]+(?:\.[0-9]+)?)\s*cm?\s*[x×]\s*"
+                    r"([0-9]+(?:\.[0-9]+)?)\s*cm?\s*$",
+                    raw,
+                    re.I,
+                )
+                if m_dim:
+                    key_vals = [("Height", m_dim.group(1)), ("Width", m_dim.group(2)), ("Depth", m_dim.group(3))]
+                else:
+                    key_vals = None
+            else:
+                key_vals = [("Height", m_dim.group(1)), ("Width", m_dim.group(2)), ("Depth", m_dim.group(3))]
+
+            if key_vals:
+                if not cur_size:
+                    cur_size = "ONE SIZE"
+                if cur_size not in size_map:
+                    size_map[cur_size] = {}
+                for key, val in key_vals:
+                    if key not in keys:
+                        keys.append(key)
+                    size_map[cur_size][key] = _format_number_cm(val)
+                i += 1
+                continue
+
+            num = r"(\d+(?:\.\d+)?|\d+(?:,\d+)?)(?:\s*(?:cm|㎝))?"
+            m = re.match(
+                rf"^([A-Za-z0-9]+)\s*-\s*([A-Za-z][A-Za-z /_-]*)\s+({num})\s*$",
+                raw_item,
+            )
             if m:
                 cur_size = m.group(1)
                 key = m.group(2).strip()
                 val = m.group(3).strip()
             else:
-                m2 = re.match(r"^([A-Za-z][A-Za-z /_-]*)\s+(\d+(?:\.\d+)?|\d+(?:,\d+)?)\s*$", raw)
-                if not m2 or not cur_size:
+                m2 = re.match(rf"^([A-Za-z][A-Za-z /_-]*)\s+({num})\s*$", raw_item)
+                if not m2:
                     # Measurements 밖의 문장(예: Fabric) 만나면 종료
                     break
+                if not cur_size:
+                    cur_size = "ONE SIZE"
                 key = m2.group(1).strip()
                 val = m2.group(2).strip()
 
@@ -847,7 +1032,19 @@ def _extract_measurements_tables(text: str) -> list[tuple[str, tuple[list[str], 
             # 헤더: 사이즈 + keys
             headers = ["사이즈"] + [_normalize_header(k) for k in keys]
             body: list[list[str]] = []
-            for sz in sorted(size_map.keys(), key=lambda x: int(x) if x.isdigit() else 9999):
+            order = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"]
+
+            def _sz_key(sz: str) -> tuple[int, int, str]:
+                szu = (sz or "").strip().upper()
+                if szu in ("ONE SIZE", "ONESIZE", "ONE-SIZE", "FREE", "OS"):
+                    return (3, 0, "")
+                if szu.isdigit():
+                    return (0, int(szu), "")
+                if szu in order:
+                    return (1, order.index(szu), "")
+                return (2, 0, szu)
+
+            for sz in sorted(size_map.keys(), key=_sz_key):
                 row = [sz]
                 for k in keys:
                     row.append(size_map[sz].get(k, ""))
@@ -856,6 +1053,244 @@ def _extract_measurements_tables(text: str) -> list[tuple[str, tuple[list[str], 
         continue
 
     return out
+
+
+def _extract_size_guide_tables(text: str) -> list[tuple[str, tuple[list[str], list[list[str]]]]]:
+    """
+    Epicenter 같은 Cafe24 커스텀 상세에서 'Size guide' 섹션을 표로 변환.
+
+    예) Size guide 이후:
+      M
+      허리 38
+      허벅지 32
+      ...
+      L
+      허리 40
+      ...
+    """
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
+    # 시작 지점: 'Size guide' 또는 'SIZE GUIDE'
+    start = None
+    for idx, ln in enumerate(lines):
+        if "size guide" in (ln or "").lower():
+            start = idx + 1
+            break
+    if start is None:
+        return []
+
+    # Aieul/Cafe24 일부: 토큰이 줄단위로 펼쳐진 matrix 포맷
+    # 예)
+    #   Size Guide
+    #   Size
+    #   Shoulders
+    #   Chest
+    #   Sleeve
+    #   Length
+    #   46
+    #   42
+    #   51
+    #   62
+    #   61
+    #   ...
+    block_lines: list[str] = []
+    stop_tokens = ("details", "fabric", "colour", "color", "shipping", "information", "delivery", "exchange", "return")
+    for ln in lines[start:]:
+        if not ln:
+            continue
+        low = ln.lower()
+        if any(tok in low for tok in stop_tokens):
+            break
+        block_lines.append(ln)
+
+    def _is_size_marker_token(tok: str) -> bool:
+        t = (tok or "").strip().upper()
+        if not t:
+            return False
+        if t in {"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "ONE SIZE", "ONESIZE", "FREE", "OS"}:
+            return True
+        return bool(re.match(r"^\d", tok.strip()))
+
+    if block_lines and block_lines[0].strip().lower() == "size":
+        first_val_idx = None
+        for bi in range(1, len(block_lines)):
+            if _is_size_marker_token(block_lines[bi]):
+                first_val_idx = bi
+                break
+        if first_val_idx and first_val_idx >= 2:
+            raw_headers = block_lines[:first_val_idx]
+            vals = block_lines[first_val_idx:]
+            ncol = len(raw_headers)
+            nrow = len(vals) // ncol
+            if nrow >= 1:
+                vals = vals[: nrow * ncol]
+                headers = [_normalize_header(h) if re.search(r"[A-Za-z]", h) else h for h in raw_headers]
+                body = [vals[ri * ncol : (ri + 1) * ncol] for ri in range(nrow)]
+                return [("Size guide", (headers, body))]
+
+    size_map: dict[str, dict[str, str]] = {}
+    keys: list[str] = []
+    cur_size: str | None = None
+
+    size_token_re = re.compile(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|ONE\s*SIZE|ONESIZE|FREE|OS)$", re.I)
+    # 한국어 키/값: 허리 38 / 총장 106 / 밑단 25.5
+    kv_ko_re = re.compile(
+        r"^(허리|가슴|어깨|소매|소매통|허벅지|앞밑위|뒷밑위|밑단|총장)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:cm|㎝)?\s*$"
+    )
+    kv_en_re = re.compile(
+        r"^([A-Za-z][A-Za-z /_-]*)\s*([0-9]+(?:\.[0-9]+)?)\s*$"
+    )
+
+    for ln in lines[start:]:
+        if not ln:
+            continue
+        low = ln.lower()
+        if low.startswith("*") or "실측" in ln or "오차" in ln or "deviation" in low:
+            break
+        # 사이즈 라벨 단독 라인
+        if size_token_re.match(ln):
+            cur_size = ln.strip().upper().replace("  ", " ")
+            if cur_size in ("ONESIZE", "ONE-SIZE", "ONE SIZE"):
+                cur_size = "ONE SIZE"
+            if cur_size not in size_map:
+                size_map[cur_size] = {}
+            continue
+
+        # 불릿 제거
+        raw_item = ln.lstrip("-•·").strip()
+
+        # 스카프/소품류: 130 / 35 같은 형태 (가로/세로)
+        m_slash = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*$", raw_item)
+        if m_slash:
+            if not cur_size:
+                cur_size = "ONE SIZE"
+                size_map.setdefault(cur_size, {})
+            if "가로" not in keys:
+                keys.append("가로")
+            if "세로" not in keys:
+                keys.append("세로")
+            size_map[cur_size]["가로"] = _format_number_cm(m_slash.group(1))
+            size_map[cur_size]["세로"] = _format_number_cm(m_slash.group(2))
+            continue
+
+        m = kv_ko_re.match(raw_item)
+        if m:
+            if not cur_size:
+                cur_size = "ONE SIZE"
+                size_map.setdefault(cur_size, {})
+            key = m.group(1).strip()
+            val = _format_number_cm(m.group(2).strip())
+            if key not in keys:
+                keys.append(key)
+            size_map[cur_size][key] = val
+            continue
+
+        m2 = kv_en_re.match(raw_item)
+        if m2:
+            if not cur_size:
+                cur_size = "ONE SIZE"
+                size_map.setdefault(cur_size, {})
+            key = m2.group(1).strip()
+            val = _format_number_cm(m2.group(2).strip())
+            if key not in keys:
+                keys.append(key)
+            size_map[cur_size][key] = val
+            continue
+
+    if not size_map or not keys:
+        return []
+
+    headers = ["사이즈"] + [_normalize_header(k) if re.search(r"[A-Za-z]", k) else k for k in keys]
+    order = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "ONE SIZE"]
+
+    def _sz_key(sz: str) -> tuple[int, int, str]:
+        szu = (sz or "").strip().upper()
+        if szu in order:
+            return (0, order.index(szu), "")
+        return (1, 0, szu)
+
+    body: list[list[str]] = []
+    for sz in sorted(size_map.keys(), key=_sz_key):
+        row = [sz]
+        for k in keys:
+            row.append(size_map[sz].get(k, ""))
+        body.append(row)
+    return [("Size guide", (headers, body))]
+
+
+def _extract_size_info_tables(text: str) -> list[tuple[str, tuple[list[str], list[list[str]]]]]:
+    """
+    HTAE/Cafe24 일부 상세의 'Size Info (cm)' 포맷을 표로 변환.
+
+    예)
+      Size Info (cm)
+      Waist(허리) / Front Rise(밑위) / Thigh(허벅지) / Length(기장) / Hem(밑단)
+      1(28) 37.5 / 30 / 30 / 104 / 21
+      2(30) 40 / 31 / 31 / 106 / 22
+    """
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
+    start = None
+    for i, ln in enumerate(lines):
+        if "size info" in ln.lower():
+            start = i
+            break
+    if start is None:
+        return []
+
+    # 헤더 라인 탐색(대개 '/' 구분)
+    header_line = None
+    j = start + 1
+    while j < len(lines):
+        ln = lines[j]
+        low = ln.lower()
+        if not ln:
+            j += 1
+            continue
+        if any(tok in low for tok in ("information", "delivery info", "shipping info", "exchange", "return")):
+            return []
+        if "/" in ln:
+            header_line = ln
+            j += 1
+            break
+        j += 1
+    if not header_line:
+        return []
+
+    raw_headers = [h.strip() for h in header_line.split("/") if h.strip()]
+    if not raw_headers:
+        return []
+    headers = ["사이즈"] + [_normalize_header(h) for h in raw_headers]
+
+    body: list[list[str]] = []
+    row_re = re.compile(r"^([0-9A-Za-z]+(?:\([^)]*\))?)\s+(.+)$")
+    stop_tokens = ("information", "delivery info", "shipping info", "exchange", "return", "구매방법", "상품 옵션")
+    for ln in lines[j:]:
+        low = ln.lower()
+        if not ln:
+            continue
+        if any(tok in low for tok in stop_tokens):
+            break
+        if ln.startswith("*"):
+            break
+        m = row_re.match(ln)
+        if not m:
+            # 모델 스펙/설명 문장 시작 시 종료
+            if re.search(r"[A-Za-z가-힣]", ln) and "/" not in ln:
+                break
+            continue
+        size_lbl = m.group(1).strip()
+        vals = [v.strip() for v in m.group(2).split("/") if v.strip()]
+        if len(vals) < len(raw_headers):
+            continue
+        vals = vals[: len(raw_headers)]
+        body.append([size_lbl] + [_format_number_cm(v) for v in vals])
+
+    if not body:
+        return []
+    return [("Size Info", (headers, body))]
 
 
 def render_product_block_naver_text(
@@ -885,6 +1320,10 @@ def render_product_block_naver_text(
         plain = _html_fragment_to_plain_text(size_note_html)
         # Measurements가 있으면 표로도 같이 뽑아주기(네이버용)
         ms = _extract_measurements_tables(plain)
+        if not ms:
+            ms = _extract_size_guide_tables(plain)
+        if not ms:
+            ms = _extract_size_info_tables(plain)
         if ms:
             # 옵션/제품 설명 텍스트는 제외하고, 실측 표만 남김
             for _title, (h, b) in ms:
@@ -1041,6 +1480,7 @@ def render_product_block_naver_html(
         imgs = imgs + [""] * (2 - len(imgs))
 
     parts: list[str] = []
+    note_imgs: list[str] = _extract_img_urls_from_fragment(size_note_html or "")
     if imgs[0] and imgs[1]:
         parts.append(_naver_image_strip(imgs[0], imgs[1]))
         parts.append(_naver_spacer(gap_px))
@@ -1059,6 +1499,10 @@ def render_product_block_naver_html(
     if not picked_table and size_note_html:
         plain = _html_fragment_to_plain_text(size_note_html)
         ms = _extract_measurements_tables(plain)
+        if not ms:
+            ms = _extract_size_guide_tables(plain)
+        if not ms:
+            ms = _extract_size_info_tables(plain)
         if ms:
             _t, (h, b) = ms[0]
             picked_table = (h, b)
@@ -1079,8 +1523,20 @@ def render_product_block_naver_html(
             table_html = table_html.replace("font-size: 13pt;", f"font-size: {table_pt}pt;")
         parts.append(table_html)
         parts.append(_naver_spacer(gap_px))
+        # 옵션표는 있는데 상세의 Size guide가 이미지인 경우, 이미지를 추가로 붙인다.
+        if note_imgs:
+            ni1 = note_imgs[0]
+            ni2 = note_imgs[1] if len(note_imgs) > 1 else note_imgs[0]
+            parts.append(_naver_image_strip(ni1, ni2))
+            parts.append(_naver_spacer(gap_px))
     elif extra_text:
         parts.append(_naver_text_center(_naver_span(extra_text, font_pt=13), width_pct=text_width_pct))
+        parts.append(_naver_spacer(gap_px))
+    elif note_imgs:
+        # 텍스트가 없고 이미지형 Size guide만 있는 경우
+        i1 = note_imgs[0]
+        i2 = note_imgs[1] if len(note_imgs) > 1 else note_imgs[0]
+        parts.append(_naver_image_strip(i1, i2))
         parts.append(_naver_spacer(gap_px))
 
     if mid_html:
@@ -1183,14 +1639,20 @@ def main() -> None:
     parsed = urlparse(list_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise SystemExit("http(s) 목록 URL을 입력하세요.")
-    cafe24_list = "list.html" in parsed.path or "/product/list" in parsed.path
+    cafe24_list = (
+        "list.html" in parsed.path
+        or "/product/list" in parsed.path
+        or ("/category/" in parsed.path and not _is_shopify_collection_url(parsed))
+    )
+    cafe24_prod = _is_cafe24_product_url(parsed) and not _is_shopify_product_url(parsed)
     imweb_cat = _is_imweb_category_url(parsed)
     shopify_pdp = _is_shopify_product_url(parsed)
     shopify_col = _is_shopify_collection_url(parsed) and not shopify_pdp
-    if not cafe24_list and not imweb_cat and not shopify_col and not shopify_pdp:
+    if not cafe24_list and not cafe24_prod and not imweb_cat and not shopify_col and not shopify_pdp:
         raise SystemExit(
             "지원 형식: Cafe24 목록(.../product/list.html?...) / 아임웹(.../숫자/) / "
-            "Shopify 컬렉션(.../collections/...) / Shopify 단일 상품(.../products/핸들)"
+            "Shopify 컬렉션(.../collections/...) / Shopify 단일 상품(.../products/핸들) / "
+            "Cafe24 단일 상품(.../product/... 또는 .../product/detail.html?product_no=...)"
         )
 
     session = _session()
@@ -1198,12 +1660,15 @@ def main() -> None:
     list_html = fetch(session, list_url)
     time.sleep(args.sleep)
 
-    product_urls = collect_product_urls(list_html, list_url)
+    product_urls = [] if cafe24_prod else collect_product_urls(list_html, list_url)
     engine = "cafe24"
     shopify_products: list[dict] | None = None
     shopify_handle_imgs: dict[str, list[str]] | None = None
 
-    if not product_urls and imweb_cat:
+    if cafe24_prod:
+        engine = "cafe24"
+        product_urls = [list_url]
+    elif not product_urls and imweb_cat:
         product_urls = collect_imweb_product_urls(list_html, list_url)
         engine = "imweb"
     elif not product_urls and shopify_pdp:
@@ -1329,13 +1794,13 @@ def main() -> None:
                 title = imweb_title(soup) if engine == "imweb" else _title_from_page(soup)
                 images = imweb_product_images(soup, purl) if engine == "imweb" else _parse_ld_product_images(soup, purl)
                 table = parse_size_table(soup)
-                note = None if table else (imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup))
+                note = imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup)
                 blocks.append(render_product_block_naver_text(title, images, table, note))
             elif args.format == "naver_html":
                 title = imweb_title(soup) if engine == "imweb" else _title_from_page(soup)
                 images = imweb_product_images(soup, purl) if engine == "imweb" else _parse_ld_product_images(soup, purl)
                 table = parse_size_table(soup)
-                note = None if table else (imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup))
+                note = imweb_size_note(soup) if engine == "imweb" else parse_size_fallback_note(soup)
                 blocks.append(render_product_block_naver_html(title, images, table, note, title_pt=17, table_pt=13))
             else:
                 blocks.append(build_block_from_detail(soup, purl, engine))
@@ -1348,7 +1813,7 @@ def main() -> None:
         doc = (
             "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"/>"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
-            f"<title>{html.escape(site_label)} 네이버형</title></head>"
+            "</head>"
             "<body style=\"margin:0;padding:24px;background:#fff;\">"
             f"{''.join(blocks)}</body></html>"
         )
